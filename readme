@@ -1,0 +1,16 @@
+issue #135487
+
+When parsing very large quantity values, i.e., values close to math.MaxInt64, k8s.io/apimachinery/pkg/api/resource.MustParse is unable to correctly interpret them.
+Similar parsing failures also occur when these high values are used within or passed to CEL validation rules.
+
+q := resource.MustParse(strconv.FormatInt(math.MaxInt64, 10))
+fmt.Println(q.AsInt64())
+
+fmt.Println(resource.NewQuantity(math.MaxInt64, resource.DecimalSI).AsInt64())
+
+OUTPUT:
+0 false
+9223372036854775807 true
+
+#problem likely in func ParseQuantity(str string) (Quantity, error)
+

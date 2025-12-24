@@ -1,100 +1,193 @@
-# Kubernetes (K8s)
+What happened?
+When parsing very large quantity values, i.e., values close to math.MaxInt64, k8s.io/apimachinery/pkg/api/resource.MustParse is unable to correctly interpret them.
+ Similar parsing failures also occur when these high values are used within or passed to CEL validation rules.
 
-[![CII Best Practices](https://bestpractices.coreinfrastructure.org/projects/569/badge)](https://bestpractices.coreinfrastructure.org/projects/569) [![Go Report Card](https://goreportcard.com/badge/github.com/kubernetes/kubernetes)](https://goreportcard.com/report/github.com/kubernetes/kubernetes) ![GitHub release (latest SemVer)](https://img.shields.io/github/v/release/kubernetes/kubernetes?sort=semver)
+test run:
+```go
+q := resource.MustParse(strconv.FormatInt(math.MaxInt64, 10))
+fmt.Println(q.AsInt64())
 
-<img src="https://github.com/kubernetes/kubernetes/raw/master/logo/logo.png" width="100">
-
-----
-
-Kubernetes, also known as K8s, is an open source system for managing [containerized applications]
-across multiple hosts. It provides basic mechanisms for the deployment, maintenance,
-and scaling of applications.
-
-Kubernetes builds upon a decade and a half of experience at Google running
-production workloads at scale using a system called [Borg],
-combined with best-of-breed ideas and practices from the community.
-
-Kubernetes is hosted by the Cloud Native Computing Foundation ([CNCF]).
-If your company wants to help shape the evolution of
-technologies that are container-packaged, dynamically scheduled,
-and microservices-oriented, consider joining the CNCF.
-For details about who's involved and how Kubernetes plays a role,
-read the CNCF [announcement].
-
-----
-
-## To start using K8s
-
-See our documentation on [kubernetes.io].
-
-Take a free course on [Scalable Microservices with Kubernetes].
-
-To use Kubernetes code as a library in other applications, see the [list of published components](https://git.k8s.io/kubernetes/staging/README.md).
-Use of the `k8s.io/kubernetes` module or `k8s.io/kubernetes/...` packages as libraries is not supported.
-
-## To start developing K8s
-
-The [community repository] hosts all information about
-building Kubernetes from source, how to contribute code
-and documentation, who to contact about what, etc.
-
-If you want to build Kubernetes right away there are two options:
-
-##### You have a working [Go environment].
-
-```
-git clone https://github.com/kubernetes/kubernetes
-cd kubernetes
-make
+fmt.Println(resource.NewQuantity(math.MaxInt64, resource.DecimalSI).AsInt64())
 ```
 
-##### You have a working [Docker environment].
-
+output:
 ```
-git clone https://github.com/kubernetes/kubernetes
-cd kubernetes
-make quick-release
+0 false// this is incorrect as it should return true
+9223372036854775807 true
 ```
 
-For the full story, head over to the [developer's documentation].
+SOLUTION TILL NOW
+no logs so problem comes directly from library as mentioned
 
-## Support
+```go
+func MustParse(str string) Quantity {
+        q, err := ParseQuantity(str)
+        if err != nil {
+                panic(fmt.Errorf("cannot parse '%v': %v", str, err))
+        }
+        return q
+}
+```
 
-If you need support, start with the [troubleshooting guide],
-and work your way through the process that we've outlined.
+-function does not panic
 
-That said, if you have questions, reach out to us
-[one way or another][communication].
+examine ParseQuantity(str)// ParseQuantity turns str into a Quantity, or returns an error.
 
-[announcement]: https://cncf.io/news/announcement/2015/07/new-cloud-native-computing-foundation-drive-alignment-among-container
-[Borg]: https://research.google.com/pubs/pub43438.html?authuser=1
-[CNCF]: https://www.cncf.io/about
-[communication]: https://git.k8s.io/community/communication
-[community repository]: https://git.k8s.io/community
-[containerized applications]: https://kubernetes.io/docs/concepts/overview/what-is-kubernetes/
-[developer's documentation]: https://git.k8s.io/community/contributors/devel#readme
-[Docker environment]: https://docs.docker.com/engine
-[Go environment]: https://go.dev/doc/install
-[kubernetes.io]: https://kubernetes.io
-[Scalable Microservices with Kubernetes]: https://www.udacity.com/course/scalable-microservices-with-kubernetes--ud615
-[troubleshooting guide]: https://kubernetes.io/docs/tasks/debug/
+```go
+func parseQuantityString(str string) (positive bool, value, num, denom, suffix string, err error) {
+	positive = true
+	pos := 0
+	end := len(str)
 
-## Community Meetings 
+	// handle leading sign
+	if pos < end {
+		switch str[0] {
+		case '-':
+			positive = false
+			pos++
+		case '+':
+			pos++
+		}
+	}
 
-The [Calendar](https://www.kubernetes.dev/resources/calendar/) has the list of all the meetings in the Kubernetes community in a single location.
+	// strip leading zeros
+Zeroes:
+	for i := pos; ; i++ {
+		if i >= end {
+			num = "0"
+			value = num
+			return
+		}
+		switch str[i] {
+		case '0':
+			pos++
+		default:
+			break Zeroes
+		}
+	}
 
-## Adopters
+	// extract the numerator
+Num:
+	for i := pos; ; i++ {
+		if i >= end {
+			num = str[pos:end]
+			value = str[0:end]
+			return
+		}
+		switch str[i] {
+		case '0', '1', '2', '3', '4', '5', '6', '7', '8', '9':
+		default:
+			num = str[pos:i]
+			pos = i
+			break Num
+		}
+	}
 
-The [User Case Studies](https://kubernetes.io/case-studies/) website has real-world use cases of organizations across industries that are deploying/migrating to Kubernetes.
+	// if we stripped all numerator positions, always return 0
+	if len(num) == 0 {
+		num = "0"
+	}
 
-## Governance 
+	// handle a denominator
+	if pos < end && str[pos] == '.' {
+		pos++
+	Denom:
+		for i := pos; ; i++ {
+			if i >= end {
+				denom = str[pos:end]
+				value = str[0:end]
+				return
+			}
+			switch str[i] {
+			case '0', '1', '2', '3', '4', '5', '6', '7', '8', '9':
+			default:
+				denom = str[pos:i]
+				pos = i
+				break Denom
+			}
+		}
+		// TODO: we currently allow 1.G, but we may not want to in the future.
+		// if len(denom) == 0 {
+		// 	err = ErrFormatWrong
+		// 	return
+		// }
+	}
+	value = str[0:pos]
 
-Kubernetes project is governed by a framework of principles, values, policies and processes to help our community and constituents towards our shared goals.
+	// grab the elements of the suffix
+	suffixStart := pos
+	for i := pos; ; i++ {
+		if i >= end {
+			suffix = str[suffixStart:end]
+			return
+		}
+		if !strings.ContainsAny(str[i:i+1], "eEinumkKMGTP") {
+			pos = i
+			break
+		}
+	}
+	if pos < end {
+		switch str[pos] {
+		case '-', '+':
+			pos++
+		}
+	}
+Suffix:
+	for i := pos; ; i++ {
+		if i >= end {
+			suffix = str[suffixStart:end]
+			return
+		}
+		switch str[i] {
+		case '0', '1', '2', '3', '4', '5', '6', '7', '8', '9':
+		default:
+			break Suffix
+		}
+	}
+	// we encountered a non decimal in the Suffix loop, but the last character
+	// was not a valid exponent
+	err = ErrFormatWrong
+	return
+}
 
-The [Kubernetes Community](https://github.com/kubernetes/community/blob/master/governance.md) is the launching point for learning about how we organize ourselves.
+// ParseQuantity turns str into a Quantity, or returns an error.
+func ParseQuantity(str string) (Quantity, error) {
+	if len(str) == 0 {
+		return Quantity{}, ErrFormatWrong
+	}
+	if str == "0" {
+		return Quantity{Format: DecimalSI, s: str}, nil
+	}
 
-The [Kubernetes Steering community repo](https://github.com/kubernetes/steering) is used by the Kubernetes Steering Committee, which oversees governance of the Kubernetes project.
+	positive, value, num, denom, suf, err := parseQuantityString(str)
+	if err != nil {
+		return Quantity{}, err
+	}
 
-## Roadmap 
+	base, exponent, format, ok := quantitySuffixer.interpret(suffix(suf))
+	if !ok {
+		return Quantity{}, ErrSuffix
+	}
 
-The [Kubernetes Enhancements repo](https://github.com/kubernetes/enhancements) provides information about Kubernetes releases, as well as feature tracking and backlogs.
+	precision := int32(0)
+	scale := int32(0)
+	mantissa := int64(1)
+	switch format {
+	case DecimalExponent, DecimalSI:
+		scale = exponent
+		precision = maxInt64Factors - int32(len(num)+len(denom))
+	case BinarySI:
+		scale = 0
+		switch {
+		case exponent >= 0 && len(denom) == 0:
+			// only handle positive binary numbers with the fast path
+			mantissa = int64(int64(mantissa) << uint64(exponent))
+			// 1Mi (2^20) has ~6 digits of decimal precision, so exponent*3/10 -1 is roughly the precision
+			precision = 15 - int32(len(num)) - int32(float32(exponent)*3/10) - 1
+		default:
+			precision = -1
+		}
+	}
+```
+
+-after examination the actual problem seems to be `precision`

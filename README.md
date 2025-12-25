@@ -193,13 +193,13 @@ func ParseQuantity(str string) (Quantity, error) {
 ```
 
 -after examination the actual problem seems to be `precision`
-Notes:
+##Notes:
 
 This is a library limitation, not a panic or crash.
 
 NewQuantity should be used for known int64 values as a workaround.
 
-Current Status
+##Current Status:
 
 No patch applied yet; investigation only.
 

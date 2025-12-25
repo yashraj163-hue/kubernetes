@@ -193,4 +193,18 @@ func ParseQuantity(str string) (Quantity, error) {
 ```
 
 -after examination the actual problem seems to be `precision`
+Notes:
+
+This is a library limitation, not a panic or crash.
+
+NewQuantity should be used for known int64 values as a workaround.
+
+Current Status
+
+No patch applied yet; investigation only.
+
+Master branch is unaffected.
+
+CEL validation fails for these high values due to the same limitation.
+
 //i am running all tests directly here since this is not master branch and i want to work directly with the codebase

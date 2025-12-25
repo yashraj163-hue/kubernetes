@@ -312,7 +312,7 @@ func ParseQuantity(str string) (Quantity, error) {
 			precision = -1
 		}
 	}
-
+    //this is exactly where the issue-135487 parsing failure seems to happen
 	if precision >= 0 {
 		// if we have a denominator, shift the entire value to the left by the number of places in the
 		// denominator
